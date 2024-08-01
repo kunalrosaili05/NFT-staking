@@ -9,22 +9,25 @@ import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 
 contract NFTStaking is Initializable, UUPSUpgradeable, PausableUpgradeable, OwnableUpgradeable {
- // With this, we set up the contract to work with the ERC721 NFT contract
+    // With this, we set up the contract to work with the ERC721 NFT contract
     IERC721Upgradeable public nftContract;
     
-    // With this, we specify the ERC20 token contract that will be used for rewards
+      // With this, we specify the ERC20 token contract that will be used for rewards
     IERC20Upgradeable public rewardToken;
     
-        // With this, we define the rate at which rewards are calculated (per block)
+    // With this, we define the rate at which rewards are calculated (per block)
     uint256 public rewardRate;
     
-  // With this, we set the number of blocks required before rewards can be claimed
+// With this, we set the number of blocks required before rewards can be claimed
     uint256 public delayPeriod;
     
     // With this, we determine the number of blocks required to unbond a staked NFT
     uint256 public unbondingPeriod;
 
-      // With this structure, we hold information about each staked NFT
+    // With this, we store pending rewards for each NFT
+    mapping(uint256 => uint256) public pendingRewards;
+
+  // With this structure, we hold information about each staked NFT
     struct StakedNFT {
         address owner;               // Owner of the staked NFT
         uint256 stakedBlock;         // Block number when the NFT was staked
@@ -33,18 +36,18 @@ contract NFTStaking is Initializable, UUPSUpgradeable, PausableUpgradeable, Owna
         uint256 unstakedBlock;       // Block number when the NFT was unstaked
     }
 
- // With this, we map each NFT ID to its staked information
+    // With this, we map each NFT ID to its staked information
     mapping(uint256 => StakedNFT) public stakedNFTs;
     
     // With this, we map each owner address to their list of staked NFT IDs
     mapping(address => uint256[]) public ownerToNFTs;
 
-    // With these events, we log important actions for transparency
+   // With these events, we log important actions for transparency
     event NFTStaked(address indexed owner, uint256 indexed nftId);
     event NFTUnstaked(address indexed owner, uint256 indexed nftId);
     event RewardsClaimed(address indexed owner, uint256 reward);
 
-      // With this modifier, we ensure that only the owner of an NFT can access certain functions
+  // With this modifier, we ensure that only the owner of an NFT can access certain functions
     modifier onlyNFTOwner(uint256 nftId) {
         require(stakedNFTs[nftId].owner == msg.sender, "Not the NFT owner");
         _;
@@ -57,7 +60,7 @@ contract NFTStaking is Initializable, UUPSUpgradeable, PausableUpgradeable, Owna
         uint256 _delayPeriod,
         uint256 _unbondingPeriod
     ) public initializer {
-        __Ownable_init(msg.sender);      // With this, we set the initial owner of the contract
+        __Ownable_init(msg.sender);     // With this, we set the initial owner of the contract
         __Pausable_init();
         __UUPSUpgradeable_init();
 
@@ -68,7 +71,7 @@ contract NFTStaking is Initializable, UUPSUpgradeable, PausableUpgradeable, Owna
         unbondingPeriod = _unbondingPeriod;
     }
 
-    // With this constructor, we disable initializers to prevent the contract from being initialized again
+      // With this constructor, we disable initializers to prevent the contract from being initialized again
     constructor() {
         _disableInitializers();
     }
@@ -80,7 +83,7 @@ contract NFTStaking is Initializable, UUPSUpgradeable, PausableUpgradeable, Owna
             uint256 nftId = nftIds[i];
             require(nftContract.ownerOf(nftId) == msg.sender, "You must own the NFT");
             
-        // With this, we transfer the NFT to the contract
+           // With this, we transfer the NFT to the contract
             nftContract.transferFrom(msg.sender, address(this), nftId);
 
             // With this, we record the details of the staked NFT
@@ -92,7 +95,7 @@ contract NFTStaking is Initializable, UUPSUpgradeable, PausableUpgradeable, Owna
                 unstakedBlock: 0
             });
 
-                 // With this, we keep track of the staked NFT for the owner
+            // With this, we keep track of the staked NFT for the owner
             ownerToNFTs[msg.sender].push(nftId);
 
             emit NFTStaked(msg.sender, nftId);
@@ -105,7 +108,7 @@ contract NFTStaking is Initializable, UUPSUpgradeable, PausableUpgradeable, Owna
             require(stakedNFTs[nftId].owner == msg.sender, "Not the NFT owner");
             require(!stakedNFTs[nftId].unstaked, "Already unstaked");
 
-               // With this, we mark the NFT as unstaked
+           // With this, we mark the NFT as unstaked
             stakedNFTs[nftId].unstaked = true;
             stakedNFTs[nftId].unstakedBlock = block.number;
 
@@ -117,10 +120,10 @@ contract NFTStaking is Initializable, UUPSUpgradeable, PausableUpgradeable, Owna
         require(stakedNFTs[nftId].unstaked, "NFT not unstaked");
         require(block.number >= stakedNFTs[nftId].unstakedBlock + unbondingPeriod, "Unbonding period not passed");
 
- // With this, we remove the NFT from the staked mapping before transferring it back
+    // With this, we remove the NFT from the staked mapping before transferring it back
         delete stakedNFTs[nftId];
 
-        // With this, we transfer the NFT back to the owner
+          // With this, we transfer the NFT back to the owner
         nftContract.transferFrom(address(this), msg.sender, nftId);
     }
 
@@ -134,7 +137,11 @@ contract NFTStaking is Initializable, UUPSUpgradeable, PausableUpgradeable, Owna
             if (stakedNFTs[nftId].owner == msg.sender && !stakedNFTs[nftId].unstaked) {
                 StakedNFT storage stakedNFT = stakedNFTs[nftId];
 
-             // With this, we check if the delay period has passed since the last reward claim
+                // With this, we add any pending rewards stored before the update
+                totalRewards += pendingRewards[nftId];
+                pendingRewards[nftId] = 0;
+
+           // With this, we check if the delay period has passed since the last reward claim
                 if (block.number >= stakedNFT.rewardsClaimedBlock + delayPeriod) {
                     uint256 rewardBlocks = block.number - stakedNFT.rewardsClaimedBlock;
                     totalRewards += rewardBlocks * rewardRate;
@@ -148,7 +155,7 @@ contract NFTStaking is Initializable, UUPSUpgradeable, PausableUpgradeable, Owna
         require(totalRewards > 0, "No rewards to claim");
         require(rewardToken.balanceOf(address(this)) >= totalRewards, "Insufficient rewards available");
 
-        // With this, we transfer the calculated rewards to the owner
+   // With this, we transfer the calculated rewards to the owner
         rewardToken.transfer(msg.sender, totalRewards);
 
         emit RewardsClaimed(msg.sender, totalRewards);
@@ -163,6 +170,21 @@ contract NFTStaking is Initializable, UUPSUpgradeable, PausableUpgradeable, Owna
     }
 
     function updateRewardRate(uint256 newRewardRate) external onlyOwner {
+        uint256[] storage nftIds = ownerToNFTs[msg.sender];
+        for (uint256 i = 0; i < nftIds.length; i++) {
+            uint256 nftId = nftIds[i];
+            StakedNFT storage stakedNFT = stakedNFTs[nftId];
+
+            if (!stakedNFT.unstaked && stakedNFT.owner == msg.sender) {
+                uint256 rewardBlocks = block.number - stakedNFT.rewardsClaimedBlock;
+                pendingRewards[nftId] += rewardBlocks * rewardRate;
+
+              // With this, we update the last claimed block to the current block
+                stakedNFT.rewardsClaimedBlock = block.number;
+            }
+        }
+
+          // With this, we update the reward rate
         rewardRate = newRewardRate;
     }
 
